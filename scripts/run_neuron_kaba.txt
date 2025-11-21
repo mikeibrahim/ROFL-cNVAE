@@ -1,0 +1,1 @@
+./fit_neuron.sh fixate1_nf-420_beta-ae_\(2023_05_12,07:31\) fit_main cuda:1 && ./fit_neuron.sh vanilla_fixate1_nf-420_beta-ae_\(2023_05_13,07:49\) fit_main cuda:1
