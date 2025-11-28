@@ -1,0 +1,18 @@
+======================================================================
+TRAINING SUMMARY
+======================================================================
+
+model_name: fixate1_z-2x[2,2,3]_k-4_d-17_enc(1x1)-dec(1x1)-pre(1x1)-post(1x1)
+device: mps
+total_parameters: 79750
+latent_dimensions: 14
+epochs_trained: 160
+best_val_loss: 36.974235
+final_val_loss: 36.974235
+final_val_mse: 0.041033
+test_loss: 37.695975
+test_mse: 0.043027
+total_training_time: 152.715802
+avg_epoch_time: 38.178951
+
+======================================================================

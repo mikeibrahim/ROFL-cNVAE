@@ -13,20 +13,24 @@ class BaseConfig(object):
 			full: bool = False,
 			h_file: str = 'ALL_tres25',
 			sim_path: str = 'fixate1_dim-17_n-750k',
-			base_dir: str = 'Documents/MTVAE',
+			base_dir: str = '/Users/mike/berkeley/rctn/ROFL-cNVAE',
 	):
 		super(BaseConfig, self).__init__()
+		# Always setup base directories
+		self.base_dir = base_dir if base_dir.startswith('/') else pjoin(os.environ['HOME'], base_dir)
+		self.results_dir = pjoin(self.base_dir, 'results')
+		self.runs_dir = pjoin(self.base_dir, 'runs', name)
+		self.save_dir = pjoin(self.base_dir, 'models', name)
+		self.data_dir = pjoin(self.base_dir, 'data')
+		self.h_file = pjoin(self.data_dir, f"{h_file}.h5")
+		self.sim_path = pjoin(self.data_dir, sim_path)
+		
 		if full:
-			self.base_dir = pjoin(os.environ['HOME'], base_dir)
-			self.results_dir = pjoin(self.base_dir, 'results')
-			self.runs_dir = pjoin(self.base_dir, 'runs', name)
-			self.save_dir = pjoin(self.base_dir, 'models', name)
-			self.data_dir = pjoin(self.base_dir, 'data')
-			self.h_file = pjoin(self.data_dir, f"{h_file}.h5")
-			self.sim_path = pjoin(self.data_dir, sim_path)
 			self._load_cellinfo()
-			self.seed = seed
-			self.set_seed()
+		
+		self.seed = seed
+		self.set_seed()
+		
 		if save:
 			self._mkdirs()
 			self.save()
@@ -48,15 +52,19 @@ class BaseConfig(object):
 			os.makedirs(_dir, exist_ok=True)
 
 	def _load_cellinfo(self):
-		useful = load_cellinfo(
-			pjoin(self.base_dir, 'extra_info'))
-		with h5py.File(self.h_file) as file:
-			for expt in file['YUWEI']:
-				if expt in useful:
-					continue
-				useful[expt] = [0]
-		useful = dict(sorted(useful.items()))
-		self.useful_yuwei = useful
+		try:
+			useful = load_cellinfo(
+				pjoin(self.base_dir, 'extra_info'))
+			with h5py.File(self.h_file) as file:
+				for expt in file['YUWEI']:
+					if expt in useful:
+						continue
+					useful[expt] = [0]
+			useful = dict(sorted(useful.items()))
+			self.useful_yuwei = useful
+		except FileNotFoundError:
+			# If cellinfo not available, use empty dict
+			self.useful_yuwei = {}
 		return
 
 	def set_seed(self):
