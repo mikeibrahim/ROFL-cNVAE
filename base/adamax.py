@@ -95,6 +95,6 @@ class Adamax(torch.optim.Optimizer):
 		return loss
 
 
-@torch.jit.script
+# Non-JIT version for GB10 and other unsupported GPU architectures
 def fusion1(exp_avg: torch.Tensor, grad: torch.Tensor, beta1: float):
 	return exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)

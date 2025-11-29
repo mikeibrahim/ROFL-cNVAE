@@ -1,5 +1,9 @@
 from base.utils_model import *
 
+# Disable JIT for unsupported GPU architectures (e.g., GB10 sm_121)
+import os
+os.environ['PYTORCH_JIT'] = '0'
+
 
 class Normal:
 	def __init__(
@@ -23,10 +27,8 @@ class Normal:
 			self.rng = None
 
 	def sample(self):
-		if self.rng is None:
-			return sample_normal_jit(self.mu, self.sigma)
-		else:
-			return sample_normal(self.mu, self.sigma, self.rng)
+		# Use non-JIT version for compatibility with GB10 and other new GPUs
+		return sample_normal(self.mu, self.sigma, self.rng)
 
 	def log_p(self, samples: torch.Tensor):
 		zscored = (samples - self.mu) / self.sigma
@@ -47,12 +49,11 @@ class Normal:
 		return kl
 
 
-@torch.jit.script
+# Non-JIT versions for GB10 and other unsupported GPU architectures
 def softclamp(x: torch.Tensor, c: float):
 	return x.div(c).tanh_().mul(c)
 
 
-@torch.jit.script
 def sample_normal_jit(
 		mu: torch.Tensor,
 		sigma: torch.Tensor, ):
@@ -69,7 +70,6 @@ def sample_normal(
 	return sigma * eps + mu
 
 
-@torch.jit.script
 def residual_kl(
 		delta_mu: torch.Tensor,
 		delta_sig: torch.Tensor,
