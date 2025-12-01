@@ -1,0 +1,105 @@
+{
+  "model_name": "fixate1_z-20x[3,6,12]_k-32_d-17_enc(2x2)-dec(2x1)-pre(1x3)-post(1x3)_wn",
+  "paper_reference": "Mineault et al. 2021 - cNVAE for Optical Flow",
+  "device": "cuda",
+  "total_parameters": 25515862,
+  "total_latent_dimensions": 420,
+  "n_latent_scales": 3,
+  "paper_specifications": {
+    "n_ch": 32,
+    "n_latent_per_group": 20,
+    "n_groups_per_scale": 12,
+    "total_groups": 21,
+    "total_latent_dims": 420,
+    "learning_rate": 0.002,
+    "batch_size": 600,
+    "epochs": 160,
+    "kl_beta": 0.2
+  },
+  "latent_structure": {
+    "scale_0": {
+      "name": "bottom (finest)",
+      "n_groups": 3,
+      "n_latents": 60,
+      "spatial_resolution": "2x2"
+    },
+    "scale_1": {
+      "name": "mid",
+      "n_groups": 6,
+      "n_latents": 120,
+      "spatial_resolution": "4x4"
+    },
+    "scale_2": {
+      "name": "top (coarsest)",
+      "n_groups": 12,
+      "n_latents": 240,
+      "spatial_resolution": "8x8"
+    }
+  },
+  "dci_metrics": {
+    "disentanglement": 0.4751881820992348,
+    "completeness": 0.17358087016517312,
+    "informativeness": 0.28025545767508797,
+    "per_factor_r2": {
+      "F\u2093": 0.0,
+      "F\u1d67": 0.0,
+      "Vself (norm)": 0.059430898794615494,
+      "Vself (\u03c6)": 0.12364978801693749,
+      "Vself,x": 0.26924976899419095,
+      "Vself,y": 0.2613897689788396,
+      "Xobj": 0.5253120380294414,
+      "Yobj": 0.5125074713007194,
+      "Zobj": 0.7707593849610476
+    }
+  },
+  "paper_comparison": {
+    "paper_untangling_cNVAE": 0.898,
+    "paper_untangling_NVAE": 0.639,
+    "paper_untangling_VAE": 0.548,
+    "our_untangling": 0.28025545767508797
+  },
+  "scale_specialization": {
+    "scale_0": {
+      "name": "bottom",
+      "factor_importance": {
+        "F\u2093": 0.026672718710727187,
+        "F\u1d67": 0.018170387809703877,
+        "Vself (norm)": 0.030136062745451032,
+        "Vself (\u03c6)": 0.022656155662561555,
+        "Vself,x": 0.017618287364288582,
+        "Vself,y": 0.025156160465637074,
+        "Xobj": 0.4114361380980451,
+        "Yobj": 0.3697126206199878,
+        "Zobj": 0.18644982757649828
+      }
+    },
+    "scale_1": {
+      "name": "mid",
+      "factor_importance": {
+        "F\u2093": 0.03486025570860256,
+        "F\u1d67": 0.024647788278477883,
+        "Vself (norm)": 0.057927743781625005,
+        "Vself (\u03c6)": 0.02360523894805239,
+        "Vself,x": 0.04442013019246782,
+        "Vself,y": 0.027735196585351965,
+        "Xobj": 0.14935303056442528,
+        "Yobj": 0.13391720989032713,
+        "Zobj": 0.5647058640927528
+      }
+    },
+    "scale_2": {
+      "name": "top",
+      "factor_importance": {
+        "F\u2093": 0.030587681141876814,
+        "F\u1d67": 0.02535168942151689,
+        "Vself (norm)": 0.0767469085074691,
+        "Vself (\u03c6)": 0.39419038190863404,
+        "Vself,x": 0.5328177521881775,
+        "Vself,y": 0.5393923469403961,
+        "Xobj": 0.38922427899225637,
+        "Yobj": 0.3955328682720477,
+        "Zobj": 0.781770369836049
+      }
+    }
+  }
+}
