@@ -1,0 +1,40 @@
+/home/michael/code/ROFL-cNVAE-fork/.venv/lib/python3.12/site-packages/torch/utils/data/_utils/collate.py:285: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:203.)
+  return collate([torch.as_tensor(b) for b in batch], collate_fn_map=collate_fn_map)
+
+Using checkpoint: /home/michael/code/ROFL-cNVAE-fork/models/fixate1_z-20x[5,10,20]_k-32_d-17_enc(2x2)-dec(2x1)-pre(1x3)-post(1x3)_wn/ep160-b1200-lr(0.002)_beta(0.1:0x0.3)_lamb(0.01)_gr(250.0)_(2025_12_01,19:49)/VAE+TrainerVAE_DDP-0160_(2025_12_01,20:22).pt
+
+================================================================================
+[ANALYSIS] Starting VAE Analysis Pipeline (2025_12_05,15:34)
+================================================================================
+
+[ANALYSIS] Loading model from checkpoint: /home/michael/code/ROFL-cNVAE-fork/models/fixate1_z-20x[5,10,20]_k-32_d-17_enc(2x2)-dec(2x1)-pre(1x3)-post(1x3)_wn/ep160-b1200-lr(0.002)_beta(0.1:0x0.3)_lamb(0.01)_gr(250.0)_(2025_12_01,19:49)/VAE+TrainerVAE_DDP-0160_(2025_12_01,20:22).pt
+[ANALYSIS] Model loaded successfully
+[ANALYSIS] Total parameters: 42.2M
+
+[ANALYSIS] Loading datasets...
+[ANALYSIS] Validation set: 75000 samples
+[ANALYSIS] Test set: 75000 samples
+
+[ANALYSIS] Extracting latent representations...
+[ANALYSIS] Extracted latents shape: (75000, 700)
+
+[ANALYSIS] Extracting latent representations...
+[ANALYSIS] Extracted latents shape: (75000, 700)
+
+[ANALYSIS] Running linear regression analysis...
+[ANALYSIS] Main factors R² (mean): 58.95%
+[ANALYSIS] Main factors disentanglement: 0.2036
+[ANALYSIS] Main factors completeness: 0.2386
+[ANALYSIS] Aux factors R² (mean): 83.65%
+
+[ANALYSIS] Running mutual information analysis...
+[ANALYSIS] MI (mean): 0.6796
+[ANALYSIS] MI normalized (mean): 0.2087
+[ANALYSIS] MIG (mean): 0.0567
+
+[ANALYSIS] Results saved to: /home/michael/code/ROFL-cNVAE-fork/models/results/ep160-b1200-lr(0.002)_beta(0.1:0x0.3)_lamb(0.01)_gr(250.0)_(2025_12_01,19:49)_analysis_results.json
+
+================================================================================
+[ANALYSIS] Analysis Complete (2025_12_05,15:36)
+================================================================================
+

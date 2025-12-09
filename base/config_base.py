@@ -13,7 +13,7 @@ class BaseConfig(object):
 			full: bool = False,
 			h_file: str = 'ALL_tres25',
 			sim_path: str = 'fixate1_dim-17_n-750k',
-			base_dir: str = '/Users/mike/berkeley/rctn/ROFL-cNVAE',
+			base_dir: str = '/home/michael/code/ROFL-cNVAE-fork',
 	):
 		super(BaseConfig, self).__init__()
 		# Always setup base directories
