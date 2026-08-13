@@ -1,5 +1,6 @@
 from base.config_base import *
 _KL_BALANCER_CHOICES = ['equal', 'linear', 'sqrt', 'square']
+_LATENT_TYPE_CHOICES = ['gaussian', 'poisson']
 
 
 class ConfigVAE(BaseConfig):
@@ -32,6 +33,9 @@ class ConfigVAE(BaseConfig):
 			compress: bool = True,
 			use_bn: bool = False,
 			use_se: bool = True,
+			latent_type: str = 'gaussian',
+			poisson_temp: float = 0.05,
+			poisson_n_exp: int = 128,
 			full: bool = True,
 			**kwargs,
 	):
@@ -55,6 +59,11 @@ class ConfigVAE(BaseConfig):
 		self.separable = separable
 		self.compress = compress
 		self.use_bn = use_bn
+		assert latent_type in _LATENT_TYPE_CHOICES, \
+			f"allowed latent types:\n{_LATENT_TYPE_CHOICES}"
+		self.latent_type = latent_type
+		self.poisson_temp = poisson_temp
+		self.poisson_n_exp = poisson_n_exp
 		self.groups = groups_per_scale(
 			n_scales=self.n_latent_scales,
 			n_groups_per_scale=self.n_groups_per_scale,
@@ -113,6 +122,8 @@ class ConfigVAE(BaseConfig):
 			name = f"{name}_noncmprs"
 		if self.use_bn:
 			name = f"{name}_bn"
+		if self.latent_type == 'poisson':
+			name = f"{name}_poisson"
 		return name
 
 	# def total_latents(self):

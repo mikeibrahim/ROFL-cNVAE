@@ -13,7 +13,7 @@ class BaseConfig(object):
 			full: bool = False,
 			h_file: str = 'ALL_tres25',
 			sim_path: str = 'fixate1_dim-17_n-750k',
-			base_dir: str = '/Users/mike/berkeley/rctn/ROFL-cNVAE',
+			base_dir: str = 'Documents/MTVAE',
 	):
 		super(BaseConfig, self).__init__()
 		# Always setup base directories
@@ -52,19 +52,19 @@ class BaseConfig(object):
 			os.makedirs(_dir, exist_ok=True)
 
 	def _load_cellinfo(self):
-		try:
-			useful = load_cellinfo(
-				pjoin(self.base_dir, 'extra_info'))
-			with h5py.File(self.h_file) as file:
-				for expt in file['YUWEI']:
-					if expt in useful:
-						continue
-					useful[expt] = [0]
-			useful = dict(sorted(useful.items()))
-			self.useful_yuwei = useful
-		except FileNotFoundError:
-			# If cellinfo not available, use empty dict
+		extra_dir = pjoin(self.base_dir, 'extra_info')
+		if not os.path.exists(pjoin(extra_dir, 'cellinfo.csv')) \
+				or not os.path.exists(self.h_file):
 			self.useful_yuwei = {}
+			return
+		useful = load_cellinfo(extra_dir)
+		with h5py.File(self.h_file) as file:
+			for expt in file['YUWEI']:
+				if expt in useful:
+					continue
+				useful[expt] = [0]
+		useful = dict(sorted(useful.items()))
+		self.useful_yuwei = useful
 		return
 
 	def set_seed(self):
@@ -95,6 +95,13 @@ class BaseConfigTrain(object):
 			chkpt_freq: int = 50,
 			eval_freq: int = 10,
 			log_freq: int = 20,
+			use_wandb: bool = False,
+			wandb_project: str = 'cnvae-poisson',
+			wandb_entity: str = None,
+			wandb_group: str = None,
+			wandb_name: str = None,
+			wandb_tags: List[str] = None,
+			wandb_mode: str = 'online',
 	):
 		super(BaseConfigTrain, self).__init__()
 		self.lr = lr
@@ -118,6 +125,13 @@ class BaseConfigTrain(object):
 		self.eval_freq = eval_freq
 		self.log_freq = log_freq
 		self.use_amp = use_amp
+		self.use_wandb = use_wandb
+		self.wandb_project = wandb_project
+		self.wandb_entity = wandb_entity
+		self.wandb_group = wandb_group
+		self.wandb_name = wandb_name
+		self.wandb_tags = wandb_tags
+		self.wandb_mode = wandb_mode
 
 	def name(self):
 		raise NotImplementedError

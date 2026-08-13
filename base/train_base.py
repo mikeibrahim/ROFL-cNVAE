@@ -27,6 +27,8 @@ class BaseTrainer(object):
 		self.pbar = None
 
 		self.writer = None
+		self.wandb_run = None
+		self._wandb = None
 		self.logger = None
 		self.dl_trn = None
 		self.dl_vld = None
@@ -73,6 +75,7 @@ class BaseTrainer(object):
 				path=self.model.chkpt_dir,
 				level=logging.WARNING,
 			)
+			self.setup_wandb(comment)
 		if self.cfg.scheduler_type == 'cosine':
 			self.optim_schedule.T_max *= len(self.dl_trn)
 		else:
@@ -84,25 +87,28 @@ class BaseTrainer(object):
 			leave=True,
 			position=0,
 		)
-		for epoch in self.pbar:
-			avg_loss = self.iteration(epoch, **kwargs)
-			msg = ', '.join([
-				f"epoch # {epoch + 1:d}",
-				f"avg loss: {avg_loss:3f}",
-			])
-			self.pbar.set_description(msg)
-			if not save:
-				continue
-			if (epoch + 1) % self.cfg.chkpt_freq == 0:
-				self.save(
-					checkpoint=epoch + 1,
-					path=self.model.chkpt_dir,
-				)
-			if (epoch + 1) % self.cfg.eval_freq == 0:
-				gstep = (epoch + 1) * len(self.dl_trn)
-				_ = self.validate(gstep)
-		if self.writer is not None:
-			self.writer.close()
+		try:
+			for epoch in self.pbar:
+				avg_loss = self.iteration(epoch, **kwargs)
+				msg = ', '.join([
+					f"epoch # {epoch + 1:d}",
+					f"avg loss: {avg_loss:3f}",
+				])
+				self.pbar.set_description(msg)
+				if not save:
+					continue
+				if (epoch + 1) % self.cfg.chkpt_freq == 0:
+					self.save(
+						checkpoint=epoch + 1,
+						path=self.model.chkpt_dir,
+					)
+				if (epoch + 1) % self.cfg.eval_freq == 0:
+					gstep = (epoch + 1) * len(self.dl_trn)
+					_ = self.validate(gstep)
+		finally:
+			if self.writer is not None:
+				self.writer.close()
+			self.finish_wandb()
 		return
 
 	def iteration(self, epoch: int = 0, **kwargs):
@@ -181,6 +187,207 @@ class BaseTrainer(object):
 		fname = f"{fname}_({now(True)}).pt"
 		fname = pjoin(path, fname)
 		torch.save(state_dict, fname)
+		return
+
+	def setup_wandb(self, comment: str):
+		if not getattr(self.cfg, 'use_wandb', False):
+			return
+		try:
+			import wandb
+		except ImportError:
+			warnings.warn("wandb not installed; skipping W&B logging")
+			return
+		tags = list(getattr(self.cfg, 'wandb_tags', None) or [])
+		tags += [
+			type(self.model).__name__,
+			type(self).__name__,
+			getattr(self.model.cfg, 'sim', 'unknown-sim'),
+			getattr(self.model.cfg, 'latent_type', 'unknown-latent'),
+		]
+		name = getattr(self.cfg, 'wandb_name', None) or comment
+		self._wandb = wandb
+		self.wandb_run = wandb.init(
+			project=getattr(self.cfg, 'wandb_project', None),
+			entity=getattr(self.cfg, 'wandb_entity', None),
+			group=getattr(self.cfg, 'wandb_group', None),
+			name=name,
+			tags=sorted(set(tags)),
+			mode=getattr(self.cfg, 'wandb_mode', 'online'),
+			dir=self.model.chkpt_dir,
+			config=self.wandb_config(),
+		)
+		self.wandb_run.summary.update(self.wandb_static_summary())
+		self._save_wandb_configs()
+		return
+
+	def wandb_config(self):
+		return {
+			'model': self._config_dict(self.model.cfg),
+			'train': self._config_dict(self.cfg),
+			'derived': self.wandb_static_summary(),
+		}
+
+	def wandb_static_summary(self):
+		n_params = sum(p.numel() for p in self.model.parameters())
+		n_trainable = sum(
+			p.numel() for p in self.model.parameters()
+			if p.requires_grad
+		)
+		summary = {
+			'model/name': self.model.cfg.name(),
+			'model/params_total': n_params,
+			'model/params_trainable': n_trainable,
+			'train/n_iters': self.n_iters,
+			'train/n_train_batches': len(self.dl_trn),
+			'data/n_train': len(self.dl_trn.dataset),
+			'data/n_val': len(self.dl_vld.dataset),
+			'data/n_test': len(self.dl_tst.dataset),
+		}
+		if hasattr(self.model, 'total_latents'):
+			summary['model/total_latents'] = self.model.total_latents()
+		if hasattr(self.model.cfg, 'groups'):
+			summary['model/latent_groups'] = list(self.model.cfg.groups)
+			summary['model/n_latent_groups'] = sum(self.model.cfg.groups)
+		return summary
+
+	@staticmethod
+	def _config_dict(cfg):
+		out = {}
+		for k, v in vars(cfg).items():
+			if k.startswith('_'):
+				continue
+			if callable(v):
+				continue
+			if k in {'useful_yuwei'}:
+				continue
+			out[k] = BaseTrainer._jsonable(v)
+		return out
+
+	@staticmethod
+	def _jsonable(v):
+		if isinstance(v, (str, int, float, bool)) or v is None:
+			return v
+		if isinstance(v, np.generic):
+			return v.item()
+		if isinstance(v, torch.device):
+			return str(v)
+		if isinstance(v, pathlib.Path):
+			return str(v)
+		if isinstance(v, np.ndarray):
+			return v.tolist()
+		if isinstance(v, torch.Tensor):
+			return to_np(v).tolist()
+		if isinstance(v, tuple):
+			return [BaseTrainer._jsonable(e) for e in v]
+		if isinstance(v, list):
+			return [BaseTrainer._jsonable(e) for e in v]
+		if isinstance(v, dict):
+			return {
+				str(k): BaseTrainer._jsonable(val)
+				for k, val in v.items()
+			}
+		return str(v)
+
+	def _save_wandb_configs(self):
+		if self.wandb_run is None:
+			return
+		for file_name in ['ConfigVAE.json', 'ConfigTrainVAE.json']:
+			path = pjoin(self.model.chkpt_dir, file_name)
+			if os.path.isfile(path):
+				self.wandb_run.save(path, base_path=self.model.chkpt_dir)
+		return
+
+	def log_wandb_scalars(
+			self,
+			data: Dict[str, Any],
+			step: int = None,
+			commit: bool = True, ):
+		if self.wandb_run is None:
+			return
+		payload = {}
+		for k, v in data.items():
+			v = self._to_scalar(v)
+			if v is None:
+				continue
+			payload[k] = v
+		if payload:
+			self.wandb_run.log(payload, step=step, commit=commit)
+		return
+
+	def log_wandb_figures(
+			self,
+			figs: Dict[str, Any],
+			step: int = None,
+			commit: bool = True, ):
+		if self.wandb_run is None or self._wandb is None:
+			return
+		payload = {
+			k: self._wandb.Image(v)
+			for k, v in figs.items()
+		}
+		if payload:
+			self.wandb_run.log(payload, step=step, commit=commit)
+		return
+
+	@staticmethod
+	def _to_scalar(v):
+		if isinstance(v, np.generic):
+			return v.item()
+		if torch.is_tensor(v):
+			if v.numel() != 1:
+				return None
+			return v.item()
+		if isinstance(v, np.ndarray):
+			if v.size != 1:
+				return None
+			return v.item()
+		if isinstance(v, (int, float, bool)):
+			return v
+		return None
+
+	def update_wandb_summary(self, data: Dict[str, Any]):
+		if self.wandb_run is None:
+			return
+		for k, v in data.items():
+			v = self._to_scalar(v)
+			if v is not None:
+				self.wandb_run.summary[k] = v
+		return
+
+	def finish_wandb(self):
+		if self.wandb_run is None:
+			return
+		self._summarize_wandb_stats()
+		self.wandb_run.finish()
+		self.wandb_run = None
+		self._wandb = None
+		return
+
+	def _summarize_wandb_stats(self):
+		if self.wandb_run is None:
+			return
+		for k, vals in self.stats.items():
+			if not isinstance(vals, dict) or not vals:
+				continue
+			steps = sorted(vals)
+			a = [
+				self._to_scalar(vals[s])
+				for s in steps
+			]
+			a = np.array([v for v in a if v is not None], dtype=float)
+			a = a[~np.isnan(a)]
+			if not len(a):
+				continue
+			self.wandb_run.summary[f"last/{k}"] = a[-1]
+			good = [
+				'r2', 'mi', 'mig', 'r_aux', 'disentang', 'complete',
+				'untangling',
+			]
+			if any(token in k for token in good):
+				self.wandb_run.summary[f"best/{k}"] = np.nanmax(a)
+			bad = ['loss', 'epe', 'kl', 'nelbo']
+			if any(token in k for token in bad):
+				self.wandb_run.summary[f"min/{k}"] = np.nanmin(a)
 		return
 
 	def setup_optim(self):

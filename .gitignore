@@ -5,5 +5,21 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints
 /.ipynb_checkpoints/
-/.venv/
+# Local Python packages/environments
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+build/
+dist/
+pip-wheel-metadata/
+
+# Local experiment service cache
+wandb/
+
+# Local datasets, checkpoints, and generated analysis
 /data/
+/models/
+/outputs/
+events.out.tfevents*
