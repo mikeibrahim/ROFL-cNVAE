@@ -2,7 +2,29 @@ from .vae2d import VAE
 from base.train_base import *
 from base.dataset import ROFLDS
 from analysis.linear import regress, mi_analysis
-from figures.fighelper import plot_heatmap, show_opticflow, plot_bar
+from figures.dci import plot_bar_untangle
+from figures.fighelper import (
+	get_palette,
+	plot_heatmap,
+	show_opticflow,
+	plot_bar,
+	prep_rofl,
+)
+
+
+UNTANGLING_FACTOR_NAMES = {
+	'fix_x': 'F_x',
+	'fix_y': 'F_y',
+	'slf_v_x': 'Vself_x',
+	'slf_v_y': 'Vself_y',
+	'slf_v_z': 'Vself_z',
+	'obj0_x': 'Xobj',
+	'obj0_y': 'Yobj',
+	'obj0_z': 'Zobj',
+	'obj0_v_x': 'Vobj_x',
+	'obj0_v_y': 'Vobj_y',
+	'obj0_v_z': 'Vobj_z',
+}
 
 
 class TrainerVAE(BaseTrainer):
@@ -27,6 +49,7 @@ class TrainerVAE(BaseTrainer):
 			self.alphas = self.to(alphas)
 		else:
 			self.alphas = None
+		self._selected_rofl_cache = None
 		if self.cfg.kl_anneal_cycles == 0:
 			self.betas = beta_anneal_linear(
 				n_iters=self.n_iters,
@@ -168,17 +191,34 @@ class TrainerVAE(BaseTrainer):
 			if cond_reg_spectral:
 				to_write['train/reg_spectral'] = loss_sr.item()
 			total_active = 0
+			lat_scales = self.model.latent_scales()[0]
+			kl_scale_vals = collections.defaultdict(list)
+			active_scale_vals = collections.defaultdict(list)
 			for j, kl_diag_i in enumerate(kl_diag):
 				to_write[f"kl_full/gamma_layer_{j}"] = gamma[j].item()
 				to_write[f"kl_full/vals_layer_{j}"] = kl_vals[j].item()
 				n_active = torch.sum(kl_diag_i > 0.1).item()
 				to_write[f"kl_full/active_{j}"] = n_active
+				scale = lat_scales[j]
+				to_write[f"kl/layer_{j:02d}/gamma"] = gamma[j].item()
+				to_write[f"kl/layer_{j:02d}/value"] = kl_vals[j].item()
+				to_write[f"kl/layer_{j:02d}/active_latents"] = n_active
+				to_write[f"kl/layer_{j:02d}/active_ratio"] = \
+					n_active / self.model.cfg.n_latent_per_group
+				kl_scale_vals[scale].append(kl_vals[j].item())
+				active_scale_vals[scale].append(n_active)
 				total_active += n_active
+			for scale in sorted(kl_scale_vals):
+				to_write[f"kl/scale_{scale}/value_mean"] = np.mean(
+					kl_scale_vals[scale])
+				to_write[f"kl/scale_{scale}/active_latents"] = np.sum(
+					active_scale_vals[scale])
 			to_write['train/total_active'] = total_active
 			ratio = total_active / self.model.total_latents()
 			to_write['train/total_active_ratio'] = ratio
 			for k, v in to_write.items():
 				self.writer.add_scalar(k, v, gstep)
+			self.log_wandb_scalars(to_write, gstep)
 			# reset average meters
 			if gstep % (self.cfg.log_freq * 10) == 0:
 				grads.reset()
@@ -193,6 +233,7 @@ class TrainerVAE(BaseTrainer):
 			use_ema: bool = False, ):
 		data, loss = self.forward('vld', use_ema=use_ema)
 		regr = self.regress(use_ema=use_ema)
+		selected = self.selected_regress(regr)
 
 		# sample? plot?
 		if gstep is not None:
@@ -205,6 +246,7 @@ class TrainerVAE(BaseTrainer):
 		if cond:
 			x_sample, z_sample, mi, figs = self.plot(
 				regr=regr,
+				selected=selected,
 				use_ema=use_ema,
 				n_samples=n_samples,
 			)
@@ -214,9 +256,13 @@ class TrainerVAE(BaseTrainer):
 				**mi, **figs,
 			}
 		else:
-			mi, figs = None, None
+			mi = None
+			figs = {
+				'fig/untangling_bar': self.plot_untangling_bar(selected),
+			}
 		# write
 		if gstep is not None:
+			_, _, selected_labels = self.selected_rofl()
 			to_write = {
 				f"eval/{k}": v.mean()
 				for k, v in loss.items()
@@ -229,10 +275,25 @@ class TrainerVAE(BaseTrainer):
 				'eval/r2_aux': np.nanmean(regr['regr/aux/r2']) * 100,
 				'eval/disentang': regr['regr/d'],
 				'eval/complete': regr['regr/c'],
+				'paper/selected_r2': np.nanmean(selected['r2']),
+				'paper/selected_r2_pct': np.nanmean(selected['r2']) * 100,
+				'paper/selected_disentang': selected['d'],
+				'paper/selected_complete': selected['c'],
+				**self.untangling_scalars(selected, selected_labels),
 			}
 			for k, v in to_write.items():
 				self.writer.add_scalar(k, v, gstep)
 				self.stats[k][gstep] = v
+			# Commit validation step after figures so all payloads share one step.
+			self.log_wandb_scalars(to_write, gstep, commit=False)
+			self.update_wandb_summary({
+				'latest/paper_selected_r2': np.nanmean(selected['r2']),
+				'latest/paper_selected_r2_pct': np.nanmean(selected['r2']) * 100,
+				'latest/paper_selected_disentang': selected['d'],
+				'latest/paper_selected_complete': selected['c'],
+				'latest/eval_r2_pct': np.nanmean(regr['regr/r2']) * 100,
+				'latest/eval_r2_aux_pct': np.nanmean(regr['regr/aux/r2']) * 100,
+			})
 			if cond:
 				if self.model.cfg.compress:  # only for cNVAE
 					to_write = {
@@ -243,8 +304,15 @@ class TrainerVAE(BaseTrainer):
 					for k, v in to_write.items():
 						self.writer.add_scalar(k, v, gstep)
 						self.stats[k][gstep] = v
-				for k, v in figs.items():
-					self.writer.add_figure(k, v, gstep)
+					self.log_wandb_scalars(to_write, gstep, commit=False)
+					self.update_wandb_summary({
+						'latest/mi_max_mean': to_write['eval/mi'],
+						'latest/mi_norm_max_mean': to_write['eval/mi_norm'],
+						'latest/mig': to_write['eval/mig'],
+					})
+			for k, v in figs.items():
+				self.writer.add_figure(k, v, gstep)
+			self.log_wandb_figures(figs, gstep)
 		return data, loss
 
 	def forward(
@@ -352,9 +420,55 @@ class TrainerVAE(BaseTrainer):
 		}
 		return output
 
-	def plot(self, sample: dict = None, regr: dict = None, **kwargs):
+	def selected_regress(self, regr: dict):
+		g, _, _ = self.selected_rofl()
+		return regress(
+			z=regr['z_vld'],
+			z_tst=regr['z_tst'],
+			g=g['vld'],
+			g_tst=g['tst'],
+		)
+
+	def selected_rofl(self):
+		if self._selected_rofl_cache is None:
+			self._selected_rofl_cache = prep_rofl(self.model.cfg.sim)
+		return self._selected_rofl_cache
+
+	@staticmethod
+	def untangling_scalars(selected: dict, labels: List[str]):
+		r2 = np.asarray(selected['r2'])
+		if len(r2) != len(labels):
+			raise ValueError(
+				"selected R2 values and factor labels must have equal length")
+		return {
+			f"untangling/{UNTANGLING_FACTOR_NAMES.get(label, label)}": value
+			for label, value in zip(labels, r2)
+		}
+
+	def plot_untangling_bar(self, selected: dict):
+		_, _, labels = self.selected_rofl()
+		model_name = 'cNVAE' if self.model.cfg.compress else 'VAE'
+		df = pd.DataFrame({
+			'f': labels,
+			'r2': selected['r2'],
+			'model': model_name,
+		})
+		fig, _ = plot_bar_untangle(
+			df,
+			pal=get_palette()[0],
+			display=False,
+		)
+		return fig
+
+	def plot(
+			self,
+			sample: dict = None,
+			regr: dict = None,
+			selected: dict = None,
+			**kwargs):
 		regr = regr if regr else self.regress(
 			**filter_kwargs(self.regress, kwargs))
+		selected = selected if selected else self.selected_regress(regr)
 		if sample is None:
 			x_sample, z_sample = self.sample(
 				**filter_kwargs(self.sample, kwargs))
@@ -409,6 +523,9 @@ class TrainerVAE(BaseTrainer):
 		})
 		fig, _ = plot_bar(df, tick_labelsize_x=10, display=False)
 		figs['fig/bar_aux'] = fig
+
+		# Figure 4 factors, logged every validation for progress tracking.
+		figs['fig/untangling_bar'] = self.plot_untangling_bar(selected)
 
 		if self.model.cfg.compress:  # only for cNVAE
 			n_jobs = max(1, joblib.effective_n_jobs())
@@ -622,6 +739,24 @@ def _setup_args() -> argparse.Namespace:
 		default=True,
 		type=true_fn,
 	)
+	parser.add_argument(
+		"--latent_type",
+		help='latent distribution: gaussian or poisson',
+		default='gaussian',
+		type=str,
+	)
+	parser.add_argument(
+		"--poisson_temp",
+		help='temperature for relaxed cubic Poisson latents',
+		default=0.05,
+		type=float,
+	)
+	parser.add_argument(
+		"--poisson_n_exp",
+		help='# exponential arrivals for relaxed Poisson sampling',
+		default=128,
+		type=int,
+	)
 	# training
 	parser.add_argument(
 		"--lr",
@@ -738,6 +873,48 @@ def _setup_args() -> argparse.Namespace:
 		default=False,
 	)
 	parser.add_argument(
+		"--use_wandb",
+		help='log directly to Weights & Biases?',
+		default=False,
+		type=true_fn,
+	)
+	parser.add_argument(
+		"--wandb_project",
+		help='W&B project name',
+		default='cnvae-poisson',
+		type=str,
+	)
+	parser.add_argument(
+		"--wandb_entity",
+		help='W&B entity/team',
+		default=None,
+		type=str,
+	)
+	parser.add_argument(
+		"--wandb_group",
+		help='W&B run group',
+		default=None,
+		type=str,
+	)
+	parser.add_argument(
+		"--wandb_name",
+		help='W&B run name',
+		default=None,
+		type=str,
+	)
+	parser.add_argument(
+		"--wandb_tags",
+		help='comma-separated W&B tags',
+		default=None,
+		type=str,
+	)
+	parser.add_argument(
+		"--wandb_mode",
+		help='W&B mode: online, offline, disabled',
+		default='online',
+		type=str,
+	)
+	parser.add_argument(
 		"--dry_run",
 		help='to make sure config is alright',
 		action='store_true',
@@ -775,6 +952,9 @@ def _main():
 		save=not args.dry_run,
 		use_bn=args.use_bn,
 		use_se=args.use_se,
+		latent_type=args.latent_type,
+		poisson_temp=args.poisson_temp,
+		poisson_n_exp=args.poisson_n_exp,
 		balanced_recon=True,
 		residual_kl=True,
 		scale_init=False,
@@ -805,7 +985,18 @@ def _main():
 			# freqs
 			chkpt_freq=args.chkpt_freq,
 			eval_freq=args.eval_freq,
-			log_freq=args.log_freq),
+			log_freq=args.log_freq,
+			# W&B
+			use_wandb=args.use_wandb,
+			wandb_project=args.wandb_project,
+			wandb_entity=args.wandb_entity,
+			wandb_group=args.wandb_group,
+			wandb_name=args.wandb_name,
+			wandb_tags=None if args.wandb_tags is None else [
+				e.strip() for e in args.wandb_tags.split(',')
+				if e.strip()
+			],
+			wandb_mode=args.wandb_mode),
 	)
 	msg = ', '.join([
 		f"# enc ftrs: {sum(vae.ftr_sizes()[0].values())}",

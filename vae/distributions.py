@@ -16,6 +16,7 @@ class Normal:
 	):
 		self.mu = mu
 		logsig = softclamp(logsig, 4)
+		self.logsig = logsig
 		self.sigma = torch.exp(logsig)
 		if temp != 1.0:
 			assert temp >= 0
@@ -49,6 +50,57 @@ class Normal:
 		return kl
 
 
+class Poisson:
+	def __init__(
+			self,
+			log_rate: torch.Tensor = None,
+			rate: torch.Tensor = None,
+			temp: float = 0.05,
+			n_exp: int = 128,
+			seed: int = None,
+			device: torch.device = None,
+	):
+		if rate is None:
+			log_rate = softclamp(log_rate, 4)
+			rate = torch.exp(log_rate)
+		else:
+			rate = torch.clamp(rate, min=1e-6)
+			log_rate = torch.log(rate)
+		self.rate = rate
+		self.log_rate = log_rate
+		self.temp = temp
+		self.n_exp = n_exp
+		if seed is not None:
+			self.rng = torch.Generator(device)
+			self.rng.manual_seed(seed)
+		else:
+			self.rng = None
+
+	def sample(self):
+		if self.temp <= 0:
+			return self.rate
+		return sample_poisson_eat_cubic(
+			rate=self.rate,
+			temp=self.temp,
+			n_exp=self.n_exp,
+			rng=self.rng,
+		)
+
+	def log_p(self, samples: torch.Tensor):
+		return (
+			samples * self.log_rate
+			- self.rate
+			- torch.lgamma(samples + 1)
+		)
+
+	def kl(self, p):
+		return (
+			self.rate * (self.log_rate - p.log_rate)
+			- self.rate
+			+ p.rate
+		)
+
+
 # Non-JIT versions for GB10 and other unsupported GPU architectures
 def softclamp(x: torch.Tensor, c: float):
 	return x.div(c).tanh_().mul(c)
@@ -68,6 +120,25 @@ def sample_normal(
 	eps = torch.empty_like(mu).normal_(
 		mean=0., std=1., generator=rng)
 	return sigma * eps + mu
+
+
+def sample_poisson_eat_cubic(
+		rate: torch.Tensor,
+		temp: float,
+		n_exp: int,
+		rng: torch.Generator = None, ):
+	shape = (n_exp,) + tuple(rate.shape)
+	u = torch.empty(
+		shape,
+		device=rate.device,
+		dtype=rate.dtype,
+	).exponential_(1.0, generator=rng)
+	dt = u / rate.unsqueeze(0)
+	times = torch.cumsum(dt, dim=0)
+	x = (1.0 - times) / temp
+	w = torch.clamp((x + 1.0) * 0.5, min=0.0, max=1.0)
+	indicator = w.pow(2) * (3.0 - 2.0 * w)
+	return indicator.sum(dim=0)
 
 
 def residual_kl(

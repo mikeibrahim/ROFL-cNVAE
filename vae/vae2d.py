@@ -1,5 +1,5 @@
 from base.common import *
-from .distributions import Normal
+from .distributions import Normal, Poisson, softclamp
 
 
 class VAE(Module):
@@ -9,7 +9,63 @@ class VAE(Module):
 		if self.verbose:
 			self.print()
 
+	def _dist_kwargs(
+			self,
+			temp: float = None,
+			device: torch.device = None,
+			seed: int = None, ):
+		if self.cfg.latent_type == 'poisson':
+			temp = self.cfg.poisson_temp if temp is None else temp
+			return dict(
+				temp=temp,
+				n_exp=self.cfg.poisson_n_exp,
+				device=device,
+				seed=seed,
+			)
+		temp = 1.0 if temp is None else temp
+		return dict(temp=temp, device=device, seed=seed)
+
+	def _latent_template(self, param: torch.Tensor):
+		if self.cfg.latent_type == 'gaussian':
+			param = torch.chunk(param, 2, dim=1)[0]
+		return torch.zeros_like(param)
+
+	def _standard_prior(self, template: torch.Tensor, **kws):
+		if self.cfg.latent_type == 'poisson':
+			return Poisson(rate=torch.ones_like(template), **kws)
+		return Normal(
+			mu=torch.zeros_like(template),
+			logsig=torch.zeros_like(template),
+			**kws,
+		)
+
+	def _prior_from_param(self, param: torch.Tensor, **kws):
+		if self.cfg.latent_type == 'poisson':
+			return Poisson(log_rate=param, **kws)
+		mu, logsig = torch.chunk(param, 2, dim=1)
+		return Normal(mu, logsig, **kws)
+
+	def _posterior_from_param(
+			self,
+			param: torch.Tensor,
+			prior=None,
+			**kws, ):
+		if self.cfg.latent_type == 'poisson':
+			if prior is not None and self.cfg.residual_kl:
+				log_delta = softclamp(param, 4)
+				return Poisson(
+					rate=prior.rate * torch.exp(log_delta),
+					**kws,
+				)
+			return Poisson(log_rate=param, **kws)
+		mu, logsig = torch.chunk(param, 2, dim=1)
+		if prior is not None and self.cfg.residual_kl:
+			mu = mu + prior.mu
+			logsig = logsig + prior.logsig
+		return Normal(mu, logsig, **kws)
+
 	def forward(self, x):
+		kws = self._dist_kwargs(device=x.device)
 		s = self.stem(x)
 
 		for cell in self.pre_process:
@@ -31,18 +87,14 @@ class VAE(Module):
 		idx = 0
 		ftr_enc0 = self.enc0(s)
 		param0 = self.enc_sampler[idx](ftr_enc0)
-		mu_q, logsig_q = torch.chunk(param0, 2, dim=1)
-		dist = Normal(mu_q, logsig_q)  # first approx. posterior
+		p0 = self._standard_prior(self._latent_template(param0), **kws)
+		dist = self._posterior_from_param(param0, p0, **kws)
 		z = dist.sample()
 		q_all = [dist]
 		latents = [z]
 
 		# prior for z0
-		dist = Normal(
-			mu=torch.zeros_like(z),
-			logsig=torch.zeros_like(z),
-		)
-		p_all = [dist]
+		p_all = [p0]
 
 		# begin decoder pathway
 		if not self.vanilla:
@@ -53,24 +105,18 @@ class VAE(Module):
 					if idx > 0:
 						# form prior
 						param = self.dec_sampler[idx - 1](s)
-						mu_p, logsig_p = torch.chunk(param, 2, dim=1)
-						dist = Normal(mu_p, logsig_p)
+						p_dist = self._prior_from_param(param, **kws)
+						dist = p_dist
 						p_all.append(dist)
 
 						# form encoder
 						param = comb_enc[idx - 1](comb_s[idx - 1], s)
 						param = self.enc_sampler[idx](param)
-						mu_q, logsig_q = torch.chunk(param, 2, dim=1)
-						if self.cfg.residual_kl:
-							dist = Normal(
-								mu=mu_q + mu_p,
-								logsig=logsig_q + logsig_p,
-							)
-						else:
-							dist = Normal(
-								mu=mu_q,
-								logsig=logsig_q,
-							)
+						dist = self._posterior_from_param(
+							param,
+							p_dist,
+							**kws,
+						)
 						q_all.append(dist)
 						z = dist.sample()
 						latents.append(z)
@@ -93,18 +139,16 @@ class VAE(Module):
 			n: int = 1024,
 			t: float = 1.0,
 			device: torch.device = None, ):
-		kws = dict(
+		kws = self._dist_kwargs(
 			temp=t,
 			device=device,
 			seed=self.cfg.seed,
 		)
 		z0_sz = [n] + self.z0_sz
-		mu = torch.zeros(z0_sz)
-		logsig = torch.zeros(z0_sz)
+		template = torch.zeros(z0_sz)
 		if device is not None:
-			mu = mu.to(device)
-			logsig = logsig.to(device)
-		dist = Normal(mu, logsig, **kws)
+			template = template.to(device)
+		dist = self._standard_prior(template, **kws)
 		z = dist.sample()
 		p_all = [dist]
 		latents = [z]
@@ -118,8 +162,7 @@ class VAE(Module):
 					if idx > 0:
 						# form prior
 						param = self.dec_sampler[idx - 1](s)
-						mu, logsig = torch.chunk(param, 2, dim=1)
-						dist = Normal(mu, logsig, **kws)
+						dist = self._prior_from_param(param, **kws)
 						p_all.append(dist)
 						z = dist.sample()
 						latents.append(z)
@@ -177,7 +220,7 @@ class VAE(Module):
 
 		ftr_enc = collections.defaultdict(list)
 		ftr_dec = collections.defaultdict(list)
-		kws = dict(
+		kws = self._dist_kwargs(
 			temp=t,
 			device=x.device,
 			seed=self.cfg.seed,
@@ -203,18 +246,16 @@ class VAE(Module):
 		idx = 0
 		ftr_enc0 = self.enc0(s)
 		param0 = self.enc_sampler[idx](ftr_enc0)
-		mu_q, logsig_q = torch.chunk(param0, 2, dim=1)
-		dist = Normal(mu_q, logsig_q, **kws)
+		p0 = self._standard_prior(
+			self._latent_template(param0),
+			**kws,
+		)
+		dist = self._posterior_from_param(param0, p0, **kws)
 		z = dist.sample()
 		q_all = [dist]
 		latents = [z]
 
-		dist = Normal(
-			mu=torch.zeros_like(z),
-			logsig=torch.zeros_like(z),
-			**kws,
-		)
-		p_all = [dist]
+		p_all = [p0]
 
 		# dec
 		if not self.vanilla:
@@ -225,8 +266,8 @@ class VAE(Module):
 					if idx > 0:
 						# form prior
 						param = self.dec_sampler[idx - 1](s)
-						mu_p, logsig_p = torch.chunk(param, 2, dim=1)
-						dist = Normal(mu_p, logsig_p, **kws)
+						p_dist = self._prior_from_param(param, **kws)
+						dist = p_dist
 						p_all.append(dist)
 
 						# form encoder
@@ -239,19 +280,11 @@ class VAE(Module):
 							else s,
 						)
 						param = self.enc_sampler[idx](param)
-						mu_q, logsig_q = torch.chunk(param, 2, dim=1)
-						if self.cfg.residual_kl:
-							dist = Normal(
-								mu=mu_q + mu_p,
-								logsig=logsig_q + logsig_p,
-								**kws,
-							)
-						else:
-							dist = Normal(
-								mu=mu_q,
-								logsig=logsig_q,
-								**kws,
-							)
+						dist = self._posterior_from_param(
+							param,
+							p_dist,
+							**kws,
+						)
 						q_all.append(dist)
 						z = dist.sample()
 						if lesion[idx - 1]:
@@ -588,10 +621,12 @@ class VAE(Module):
 		return mult
 
 	def _init_sampler(self, mult):
+		n_dist_params = 1 if self.cfg.latent_type == 'poisson' else 2
 		kws = dict(
 			compress=self.cfg.compress,
 			separable=self.cfg.separable,
 			latent_dim=self.cfg.n_latent_per_group,
+			n_dist_params=n_dist_params,
 			act_fn='none',
 		)
 		expand = nn.ModuleList()
@@ -743,6 +778,7 @@ class Sampler(nn.Module):
 			in_channels: int,
 			latent_dim: int,
 			spatial_dim: int,
+			n_dist_params: int = 2,
 			act_fn: str = 'none',
 			compress: bool = True,
 			separable: bool = False,
@@ -754,7 +790,7 @@ class Sampler(nn.Module):
 		self.act_fn = get_act_fn(act_fn, False)
 		kws = dict(
 			in_channels=in_channels,
-			out_channels=latent_dim * 2,
+			out_channels=latent_dim * n_dist_params,
 			init_scale=init_scale,
 			reg_lognorm=True,
 			bias=bias,
